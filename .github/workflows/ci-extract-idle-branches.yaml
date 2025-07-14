@@ -1,0 +1,77 @@
+# This workflow will extract idle branches
+
+name: Extract Idle Branches
+
+on:
+  workflow_dispatch:
+  # No inputs defined here
+
+jobs:
+  extract-idle-branches:
+    name: Extract Idle Branches
+    runs-on: [self-hosted, Linux]
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: '0'
+
+      # Setup gcloud cli
+      - name: Setup - gcloud / gsutil
+        uses: 'google-github-actions/auth@v1'
+        with:
+          credentials_json: ${{ secrets.DEV_PRIME_GHACTIONS_SA }}
+
+
+      - name: 'Set up Cloud SDK'
+        uses: 'google-github-actions/setup-gcloud@v1'
+
+
+      - name: Extract Idle Branches
+        run: |
+          REPO_URL="https://github.com/dnb-main/prime-orchestration.git"
+          REPO_NAME=$(basename "$REPO_URL" .git) # Extract repo name for cloning into a directory
+          
+          # Calculate the timestamp for one year ago
+          ONE_YEAR_AGO=$(date -d "1 year ago" +%s)
+          
+          echo -e "\nChecking for idle branches (not updated in the last year):"
+          echo "---------------------------------------------------------"
+          
+          IDLE_BRANCHES=()
+          
+          # List all remote branches and iterate through them
+          # Use `git for-each-ref` for a more structured way to list refs and their objects
+          while IFS= read -r ref; do
+            BRANCH_NAME=$(echo "$ref" | sed 's#refs/heads/##')
+            COMMIT_HASH=$(git rev-parse "$ref")
+          
+            # Get the commit date of the latest commit on the branch
+            # --format=%ct gets the committer date as a Unix timestamp
+            COMMIT_DATE=$(git log -1 --format=%ct "$COMMIT_HASH")
+          
+            if [ -z "$COMMIT_DATE" ]; then
+              echo "Warning: Could not get commit date for branch: $BRANCH_NAME (ref: $ref). Skipping."
+              continue
+            fi
+          
+            if (( COMMIT_DATE < ONE_YEAR_AGO )); then
+              COMMIT_DATE_HUMAN=$(date -d "@$COMMIT_DATE" "+%Y-%m-%d %H:%M:%S")
+              IDLE_BRANCHES+=("$BRANCH_NAME")
+            fi
+          done < <(git for-each-ref --format='%(refname)' refs/heads/)
+          
+          # Print the idle branches
+          if [ ${#IDLE_BRANCHES[@]} -eq 0 ]; then
+            echo "No idle branches found for more than a year."
+          else
+            echo "Idle branches (last updated more than a year ago):"
+            for branch in "${IDLE_BRANCHES[@]}"; do
+              BRANCH_LIST+="$branch",
+            done
+            echo "$BRANCH_LIST" | cut -c 1-$((${#BRANCH_LIST} - 1))
+          fi
+          
+          echo "Done."
